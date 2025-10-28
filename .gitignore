@@ -1,0 +1,14 @@
+# Build artifacts
+build/
+install/
+log/
+# Output files
+test_output/
+output/
+*.csv
+output.txt
+# IDE files
+.vscode/
+.idea/
+# OS files
+.DS_Store
