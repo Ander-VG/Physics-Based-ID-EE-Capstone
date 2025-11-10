@@ -10,38 +10,24 @@
 using namespace std;
 using namespace std::chrono;
 namespace fs = std::filesystem;
-
-void printUsage(const char* program_name) {
-    cout << "╔════════════════════════════════════════════════════════════════╗" << endl;
-    cout << "║         TurtleBot3 Physics Based IDS - Unified Pipeline        ║" << endl;
-    cout << "╚════════════════════════════════════════════════════════════════╝" << endl;
-    cout << "\nUsage:" << endl;
-    cout << "  " << program_name << " <bag_file> <output_dir> [experiment_name]" << endl;
-    cout << "\nArguments:" << endl;
-    cout << "  bag_file         : Path to ROS2 bag file (.db3)" << endl;
-    cout << "  output_dir       : Directory for CSV outputs" << endl;
-    cout << "  experiment_name  : Prefix for output files (optional, default: 'experiment')" << endl;
-    cout << "\nExample:" << endl;
-    cout << "  " << program_name << " ~/data/benign/rosbag1/rosbag2_0.db3 ./results benign_exp1" << endl;
-    cout << "\nOutput:" << endl;
-    cout << "  - CSV files: odom, cmd_vel, imu, js, error, battery, sensor" << endl;
-    cout << "  - Intrusion detection report" << endl;
-    cout << "════════════════════════════════════════════════════════════════\n" << endl;
-}
-
+  
 int main(int argc, char** argv) {
     // Start total timer
-    auto total_start = high_resolution_clock::now();
-    
-    // Parse command line arguments
+
+    cout << "╔════════════════════════════════════════════════════════════════╗" << endl;
+    cout << "║                  TurtleBot3 Physics Based IDS                  ║" << endl;
+    cout << "╚════════════════════════════════════════════════════════════════╝" << endl;
+
+    // Prevent segfault if launched incorrectly
     if (argc < 3) {
-        printUsage(argv[0]);
+        cerr << "ERROR: Requires <bag_path> <output_dir>" << endl;
         return 1;
     }
     
+    auto total_start = high_resolution_clock::now();
+    
     string bag_path = argv[1];
     string output_dir = argv[2];
-    string experiment_name = (argc >= 4) ? argv[3] : "experiment";
     
     // Verify bag file exists
     if (!fs::exists(bag_path)) {
@@ -52,33 +38,30 @@ int main(int argc, char** argv) {
     // Create output directory if it doesn't exist
     try {
         fs::create_directories(output_dir);
-    } catch (const exception& e) {
+    } 
+    catch (const exception& e) {
         cerr << "Error: Could not create output directory: " << e.what() << endl;
         return 1;
     }
     
     // Define output file paths
-    string odom_csv = output_dir + "/" + experiment_name + "_odom.csv";
-    string cmd_csv = output_dir + "/" + experiment_name + "_cmd_vel.csv";
-    string imu_csv = output_dir + "/" + experiment_name + "_imu.csv";
-    string js_csv = output_dir + "/" + experiment_name + "_js.csv";
-    string error_csv = output_dir + "/" + experiment_name + "_error.csv";
-    string battery_csv = output_dir + "/" + experiment_name + "_battery.csv";
-    string sensor_csv = output_dir + "/" + experiment_name + "_sensor.csv";
+    string ROSdata_csv = output_dir + "/ROSdata.csv";
+
+    cout << "\nInput: " << bag_path << endl;
+    cout << "Output: " << output_dir << endl;
+
+    cout << "\nFeatures: " << endl;
+    cout << "- Odom" << endl;
+    cout << "- Command Velocities" << endl;
+    cout << "- Inertial Measurement Unit" << endl;
+    cout << "- Joint States" << endl;
+    cout << "- Tracking Error" << endl;
+    cout << "- Battery Status" << endl;
+    cout << endl;
     
-    cout << "\n╔════════════════════════════════════════════════════════════════╗" << endl;
-    cout << "║        TurtleBot3 Intrusion Detection Pipeline                 ║" << endl;
-    cout << "╚════════════════════════════════════════════════════════════════╝" << endl;
-    cout << "\n📦 Input:  " << bag_path << endl;
-    cout << "📁 Output: " << output_dir << endl;
-    cout << "🏷️  Name:   " << experiment_name << endl;
-    
-    // ========================================================================
     // STEP 1: Convert ROS Bag to CSV Files
-    // ========================================================================
-    cout << "\n" << string(64, '=') << endl;
-    cout << "STEP 1: Converting ROS Bag to CSV Files" << endl;
-    cout << string(64, '=') << endl;
+
+    cout << "\nSTEP 1: Converting ROS Bag to CSV Files" << endl;
     
     auto step1_start = high_resolution_clock::now();
     
@@ -86,16 +69,7 @@ int main(int argc, char** argv) {
     initializeROS(argc, argv);
     
     // Convert bag to CSV
-    int messages_converted = BagtoCSV(
-        bag_path,
-        odom_csv,
-        cmd_csv,
-        imu_csv,
-        js_csv,
-        error_csv,
-        battery_csv,
-        sensor_csv
-    );
+    int rows_written = BagtoCSV(bag_path, ROSdata_csv);
     
     // Shutdown ROS2
     shutdownROS();
@@ -103,32 +77,21 @@ int main(int argc, char** argv) {
     auto step1_end = high_resolution_clock::now();
     auto step1_duration = duration_cast<milliseconds>(step1_end - step1_start);
     
-    if (messages_converted < 0) {
+    if (rows_written < 0) {
         cerr << "\n STEP 1 FAILED: Bag conversion error" << endl;
         return 1;
     }
     
     cout << "\n STEP 1 COMPLETE" << endl;
-    cout << "   Messages converted: " << messages_converted << endl;
+    cout << "   Messages converted: " << rows_written << endl;
     cout << "   Time elapsed: " << step1_duration.count() / 1000.0 << " seconds" << endl;
     
-    // ========================================================================
     // STEP 2: Run Intrusion Detection Analysis
-    // ========================================================================
-    cout << "\n" << string(64, '=') << endl;
     cout << "STEP 2: Running Physics-Based Intrusion Detection" << endl;
-    cout << string(64, '=') << endl;
     
     auto step2_start = high_resolution_clock::now();
     
-    int detection_result = runIntrusionDetection(
-        odom_csv,
-        cmd_csv,
-        imu_csv,
-        js_csv,
-        error_csv,
-        battery_csv
-    );
+    int detection_result = runIntrusionDetection(ROSdata_csv);
     
     auto step2_end = high_resolution_clock::now();
     auto step2_duration = duration_cast<milliseconds>(step2_end - step2_start);
@@ -147,9 +110,6 @@ int main(int argc, char** argv) {
     auto total_end = high_resolution_clock::now();
     auto total_duration = duration_cast<milliseconds>(total_end - total_start);
     
-    cout << "\n" << string(64, '=') << endl;
-    cout << " PIPELINE COMPLETE!" << endl;
-    cout << string(64, '=') << endl;
     cout << " Summary:" << endl;
     cout << "   Step 1 (Conversion):  " << fixed << setprecision(2) 
          << step1_duration.count() / 1000.0 << " seconds" << endl;
@@ -158,8 +118,7 @@ int main(int argc, char** argv) {
     cout << "   ─────────────────────────────────" << endl;
     cout << "   Total Runtime:        " << fixed << setprecision(2)
          << total_duration.count() / 1000.0 << " seconds" << endl;
-    cout << "\n All outputs saved to: " << output_dir << endl;
-    cout << string(64, '=') << "\n" << endl;
     
     return 0;
+    
 }
