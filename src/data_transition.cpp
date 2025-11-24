@@ -114,8 +114,7 @@ bool createCSV(const string& filename, ofstream& csv_file){
     csv_file << "v_R,v_L,";  // Right and Left wheel velocities
     csv_file << "right_encoder,left_encoder,";  // Left and Right wheel encoders
     csv_file << "tracking_error,error_x,error_y,";  // Error in sensors
-    csv_file << "battery_voltage,battery_current,battery_percentage,";//Battery states
-    csv_file << "temperature";
+    csv_file << "battery_voltage,battery_percentage";//Battery states
 
     csv_file << endl;
     return true;
@@ -195,8 +194,8 @@ int BagtoCSV (const string& bag_path, const string& output_file)
     double last_v_R = 0.0, last_v_L = 0.0;
     double last_right_encoder = 0.0, last_left_encoder = 0.0;
     double last_tracking_error = 0.0, last_error_x = 0.0, last_error_y = 0.0;
-    double last_battery_voltage = 0, last_battery_current = 0.0;
-    double last_battery_percentage = 0.0, last_temperature = 0.0;
+    double last_battery_voltage = 0;
+    double last_battery_percentage = 0.0;
 
     while (reader->has_next())
     {
@@ -240,8 +239,7 @@ int BagtoCSV (const string& bag_path, const string& output_file)
                 csv_file << last_v_R << "," << last_v_L << ",";
                 csv_file << last_right_encoder << "," << last_left_encoder << ",";
                 csv_file << last_tracking_error << "," << last_error_x << "," << last_error_y << ",";
-                csv_file << last_battery_voltage << "," << last_battery_current << ",";
-                csv_file << last_battery_percentage << "," << last_temperature;
+                csv_file << last_battery_voltage << "," << last_battery_percentage;
                 csv_file << endl;
 
                 rows++;
@@ -379,9 +377,8 @@ int BagtoCSV (const string& bag_path, const string& output_file)
                 deserializer.deserialize_message(&serialized_msg, bat_msg.get());
 
                 last_battery_voltage = bat_msg->voltage;
-                last_battery_current = bat_msg->current;
+
                 last_battery_percentage = bat_msg->percentage;
-                last_temperature = bat_msg->temperature;
             }
             catch (const exception& e) {
                 cout << "Error processing battery: " << e.what() << endl;
