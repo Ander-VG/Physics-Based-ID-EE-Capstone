@@ -19,8 +19,8 @@ ATTACK_LOG = [
 ]
 
 # Default paths
-DEFAULT_INPUT = "/home/anguiz/Capstone/output/network_flows.csv"
-DEFAULT_OUTPUT = "/home/anguiz/Capstone/output/labeled_flows.csv"
+DEFAULT_INPUT = "/home/anguiz/Capstone/ML_output/Embedded_pcap_data.pcap_Flow.csv"
+DEFAULT_OUTPUT = "/home/anguiz/Capstone/ML_output/c_short_labeled_flows.csv"
 
 
 def get_timestamp_column(df: pd.DataFrame) -> str:
@@ -30,23 +30,19 @@ def get_timestamp_column(df: pd.DataFrame) -> str:
         'Timestamp', 'timestamp', 'Flow Start', 'flow_start',
         'Start Time', 'start_time', 'Time', 'time'
     ]
-    
     for col in timestamp_candidates:
         if col in df.columns:
             return col
-    
     # Check for partial matches
     for col in df.columns:
         if 'time' in col.lower() or 'stamp' in col.lower():
             return col
-    
     raise ValueError(f"No timestamp column found. Available columns: {list(df.columns)}")
 
 
 def parse_timestamp(ts_value) -> float:
     """
     Parse timestamp to seconds from simulation start.
-    
     CICFlowMeter can output timestamps in various formats:
     - Unix epoch (float/int)
     - ISO datetime string
@@ -64,11 +60,15 @@ def parse_timestamp(ts_value) -> float:
     
     # Try parsing as datetime
     datetime_formats = [
+        '%m/%d/%Y %I:%M:%S %p',  # MM/DD/YYYY HH:MM:SS AM/PM (CICFlowMeter format)
+        '%d/%m/%Y %I:%M:%S %p',  # DD/MM/YYYY HH:MM:SS AM/PM
         '%Y-%m-%d %H:%M:%S.%f',
         '%Y-%m-%d %H:%M:%S',
         '%d/%m/%Y %H:%M:%S',
         '%m/%d/%Y %H:%M:%S',
         '%Y/%m/%d %H:%M:%S',
+        '%m/%d/%Y %H:%M',
+        '%d/%m/%Y %H:%M',
     ]
     
     for fmt in datetime_formats:
@@ -90,7 +90,6 @@ def parse_timestamp(ts_value) -> float:
 def normalize_timestamps(timestamps: np.ndarray) -> np.ndarray:
     """
     Normalize timestamps to seconds from start.
-    
     If timestamps are epoch values (large numbers), subtract the minimum
     to get relative time from simulation start.
     """
@@ -116,11 +115,9 @@ def normalize_timestamps(timestamps: np.ndarray) -> np.ndarray:
 def is_in_attack_window(timestamp: float, buffer: float = 0.5) -> tuple:
     """
     Check if a timestamp falls within any attack window.
-    
     Args:
         timestamp: Time in seconds from simulation start
         buffer: Tolerance buffer in seconds around attack windows
-    
     Returns:
         (is_attack: bool, attack_type: str or None)
     """
@@ -130,7 +127,6 @@ def is_in_attack_window(timestamp: float, buffer: float = 0.5) -> tuple:
     for attack in ATTACK_LOG:
         start = attack['start'] - buffer
         end = attack['end'] + buffer
-        
         if start <= timestamp <= end:
             return True, attack['type']
     
@@ -140,12 +136,10 @@ def is_in_attack_window(timestamp: float, buffer: float = 0.5) -> tuple:
 def label_flows(df: pd.DataFrame, timestamp_col: str, buffer: float = 0.5) -> pd.DataFrame:
     """
     Label each flow as benign (0) or attack (1) based on timestamp.
-    
     Args:
         df: DataFrame with network flows
         timestamp_col: Name of timestamp column
         buffer: Tolerance buffer around attack windows
-    
     Returns:
         DataFrame with Label and Attack_Type columns added
     """
@@ -247,7 +241,6 @@ def main():
     input_path = Path(args.input)
     if not input_path.exists():
         print(f"ERROR: Input file not found: {args.input}")
-        print("Waiting for partner to deliver network_flows.csv...")
         return 1
     
     df = pd.read_csv(args.input)
@@ -268,7 +261,6 @@ def main():
     # Save output
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
     df.to_csv(args.output, index=False)
     print(f"\nSaved labeled data to: {args.output}")
     

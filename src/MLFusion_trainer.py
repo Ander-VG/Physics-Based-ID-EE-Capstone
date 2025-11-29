@@ -1,426 +1,215 @@
 import pandas as pd
 import numpy as np
-import joblib
-import json
-import argparse
-from pathlib import Path
-from datetime import datetime
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from sklearn.neighbors import KNeighborsClassifier
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    classification_report, confusion_matrix,
-    accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score
-)
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+import joblib
+import json
+import os
+import warnings
+warnings.filterwarnings('ignore')
 
-# Default paths
-DEFAULT_INPUT = "/home/anguiz/Capstone/output/labeled_flows.csv"
-DEFAULT_OUTPUT = "/home/anguiz/Capstone/src/models/ml_fusion"
+# Configuration
+DATA_PATH = "/home/anguiz/Capstone/ML_output/NavBot25_train.csv"
+MODEL_DIR = "/home/anguiz/Capstone/src/models"
 
-# Columns to exclude from features
-EXCLUDE_COLUMNS = [
-    'Label', 'Attack_Type', 'Timestamp', 'Timestamp_Normalized',
-    'Flow ID', 'Src IP', 'Dst IP', 'timestamp', 'flow_id',
-    'src_ip', 'dst_ip', 'label', 'attack_type'
-]
+# Feature columns (CICFlowMeter features: columns 8-83, 0-indexed: 7-82)
+FEATURE_COLS = list(range(7, 83))  # 76 features
+LABEL_COL = 83  # Column 84 (0-indexed: 83) - "Label" column
 
+# Fusion parameters
+PCA_COMPONENTS = 20  # Reduce to 20 principal components
+KNN_NEIGHBORS = 5
+RF_ESTIMATORS = 50
 
-def find_feature_columns(df: pd.DataFrame) -> list:
-    """Find valid numeric feature columns."""
-    exclude_lower = {c.lower() for c in EXCLUDE_COLUMNS}
+def load_data():
+    """Load and prepare the dataset."""
+    print("=" * 60)
+    print("LOADING NAVBOT25 TRAINING DATA")
+    print("=" * 60)
     
-    feature_cols = []
-    for col in df.columns:
-        if col.lower() in exclude_lower:
-            continue
-        if not pd.api.types.is_numeric_dtype(df[col]):
-            continue
-        feature_cols.append(col)
+    df = pd.read_csv(DATA_PATH)
+    print(f"Total samples: {len(df)}")
     
-    return feature_cols
+    # Get feature names
+    feature_names = df.columns[FEATURE_COLS].tolist()
+    print(f"Number of features: {len(feature_names)}")
+    
+    # Extract features
+    X = df.iloc[:, FEATURE_COLS].values
+    
+    # Convert labels to binary: Normal=0, Attack=1
+    labels_raw = df.iloc[:, LABEL_COL].values
+    y = np.array([0 if label == 'Normal' else 1 for label in labels_raw])
+    
+    # Handle infinite and NaN values
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    # Class distribution
+    unique, counts = np.unique(y, return_counts=True)
+    print("\nClass distribution:")
+    for label, count in zip(unique, counts):
+        pct = count / len(y) * 100
+        label_name = "Benign" if label == 0 else "Attack"
+        print(f"  {label_name} ({int(label)}): {count} ({pct:.1f}%)")
+    
+    return X, y, feature_names
 
-
-def preprocess_data(df: pd.DataFrame, feature_cols: list) -> tuple:
-    """Preprocess data for training."""
-    X = df[feature_cols].copy()
-    y = df['Label'].values
+def train_fusion_model(X_train, X_test, y_train, y_test):
+    """Train the ML Fusion pipeline."""
+    print(f"\n{'=' * 60}")
+    print("TRAINING ML FUSION PIPELINE")
+    print("=" * 60)
     
-    # Handle missing and infinite values
-    X = X.fillna(0)
-    X = X.replace([np.inf, -np.inf], 0)
+    # Step 1: Scale features
+    print("\n[Step 1] Scaling features...")
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
     
-    return X.values, y, feature_cols
-
-
-def calculate_class_weights(y: np.ndarray) -> dict:
-    """Calculate class weights for imbalanced data."""
-    n_samples = len(y)
-    n_positive = np.sum(y)
-    n_negative = n_samples - n_positive
+    # Step 2: PCA dimensionality reduction
+    print(f"[Step 2] PCA reduction to {PCA_COMPONENTS} components...")
+    pca = PCA(n_components=PCA_COMPONENTS, random_state=42)
+    X_train_pca = pca.fit_transform(X_train_scaled)
+    X_test_pca = pca.transform(X_test_scaled)
+    explained_var = sum(pca.explained_variance_ratio_) * 100
+    print(f"  Explained variance: {explained_var:.1f}%")
     
-    if n_positive == 0:
-        return {0: 1, 1: 1}
+    # Step 3: Train base classifiers
+    print(f"[Step 3] Training base classifiers...")
     
-    ratio = n_negative / n_positive
-    return {0: 1, 1: min(ratio, 50)}  # Cap at 50 to prevent extreme weights
-
-
-class MLFusionPipeline:
-    """
-    ML Fusion Pipeline for IDS.
+    # KNN
+    print(f"  Training KNN (k={KNN_NEIGHBORS})...")
+    knn = KNeighborsClassifier(n_neighbors=KNN_NEIGHBORS, weights='distance', n_jobs=-1)
+    knn.fit(X_train_pca, y_train)
+    knn_proba = knn.predict_proba(X_train_pca)
+    knn_proba_test = knn.predict_proba(X_test_pca)
     
-    Pipeline architecture:
-    Raw Features → Scale → PCA(n_components)
-                         ↓
-                    ┌────┴────┐
-                    │         │
-                   KNN       RF
-                    │         │
-                    └────┬────┘
-                         ↓
-              Fuse: [PCA features, KNN_proba, RF_proba]
-                         ↓
-                        LR
-                         ↓
-                   Final Prediction
-    """
-    
-    def __init__(self, n_pca_components: int = 16):
-        self.n_pca_components = n_pca_components
-        self.scaler = StandardScaler()
-        self.pca = PCA(n_components=n_pca_components)
-        self.knn = None
-        self.rf = None
-        self.lr = None
-        self.feature_names = None
-        
-    def fit(self, X: np.ndarray, y: np.ndarray, class_weights: dict):
-        """Fit the entire fusion pipeline."""
-        print("\n  Step 1: Scaling features...")
-        X_scaled = self.scaler.fit_transform(X)
-        
-        print(f"  Step 2: PCA dimensionality reduction ({X.shape[1]} → {self.n_pca_components})...")
-        X_pca = self.pca.fit_transform(X_scaled)
-        explained_var = np.sum(self.pca.explained_variance_ratio_)
-        print(f"    Explained variance: {explained_var:.2%}")
-        
-        print("  Step 3: Training KNN on PCA features...")
-        self.knn = KNeighborsClassifier(
-            n_neighbors=5,
-            weights='distance',
-            metric='euclidean',
-            n_jobs=-1
-        )
-        self.knn.fit(X_pca, y)
-        
-        print("  Step 4: Training Random Forest on PCA features...")
-        self.rf = RandomForestClassifier(
-            n_estimators=100,
-            max_depth=15,
-            min_samples_split=5,
-            class_weight=class_weights,
-            random_state=42,
-            n_jobs=-1
-        )
-        self.rf.fit(X_pca, y)
-        
-        print("  Step 5: Creating fusion features...")
-        # Get FULL probability arrays (shape: N x n_classes)
-        # For binary: shape is (N, 2) with [prob_class_0, prob_class_1]
-        knn_proba = self.knn.predict_proba(X_pca)  # (N, 2) for binary
-        rf_proba = self.rf.predict_proba(X_pca)    # (N, 2) for binary
-        
-        # Fuse: [PCA features, KNN full proba, RF full proba]
-        # This matches your mlfusion_ids_node.py: np.concatenate([X_pca, knn_proba, rf_proba], axis=1)
-        X_fused = np.concatenate([X_pca, knn_proba, rf_proba], axis=1)
-        print(f"    Fusion feature shape: {X_fused.shape}")
-        print(f"    (PCA: {X_pca.shape[1]} + KNN_proba: {knn_proba.shape[1]} + RF_proba: {rf_proba.shape[1]})")
-        
-        print("  Step 6: Training Logistic Regression on fused features...")
-        self.lr = LogisticRegression(
-            class_weight=class_weights,
-            max_iter=1000,
-            random_state=42
-        )
-        self.lr.fit(X_fused, y)
-        
-        return self
-    
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        """Predict using the fusion pipeline."""
-        X_scaled = self.scaler.transform(X)
-        X_pca = self.pca.transform(X_scaled)
-        
-        # Full probability arrays
-        knn_proba = self.knn.predict_proba(X_pca)
-        rf_proba = self.rf.predict_proba(X_pca)
-        
-        X_fused = np.concatenate([X_pca, knn_proba, rf_proba], axis=1)
-        
-        return self.lr.predict(X_fused)
-    
-    def predict_proba(self, X: np.ndarray) -> np.ndarray:
-        """Predict probabilities using the fusion pipeline."""
-        X_scaled = self.scaler.transform(X)
-        X_pca = self.pca.transform(X_scaled)
-        
-        knn_proba = self.knn.predict_proba(X_pca)
-        rf_proba = self.rf.predict_proba(X_pca)
-        
-        X_fused = np.concatenate([X_pca, knn_proba, rf_proba], axis=1)
-        
-        return self.lr.predict_proba(X_fused)
-    
-    def get_intermediate_predictions(self, X: np.ndarray) -> dict:
-        """Get predictions from each stage for analysis."""
-        X_scaled = self.scaler.transform(X)
-        X_pca = self.pca.transform(X_scaled)
-        
-        knn_proba = self.knn.predict_proba(X_pca)
-        rf_proba = self.rf.predict_proba(X_pca)
-        
-        return {
-            'knn_pred': self.knn.predict(X_pca),
-            'knn_proba': knn_proba[:, 1],  # Attack probability
-            'rf_pred': self.rf.predict(X_pca),
-            'rf_proba': rf_proba[:, 1],    # Attack probability
-            'final_pred': self.predict(X),
-            'final_proba': self.predict_proba(X)[:, 1]
-        }
-    
-    def save(self, output_dir: Path, feature_names: list, metrics: dict):
-        """
-        Save all pipeline components.
-        
-        Output matches mlfusion_ids_node.py expectations:
-        - scaler.joblib
-        - pca.joblib
-        - knn_classifier.joblib  (not knn_model.joblib!)
-        - rf_classifier.joblib   (not rf_model.joblib!)
-        - lr_classifier.joblib   (not lr_model.joblib!)
-        - features.txt
-        - pipeline_info.json
-        """
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save individual components with EXACT names your IDS node expects
-        joblib.dump(self.scaler, output_dir / "scaler.joblib")
-        joblib.dump(self.pca, output_dir / "pca.joblib")
-        joblib.dump(self.knn, output_dir / "knn_classifier.joblib")  # Note: _classifier suffix
-        joblib.dump(self.rf, output_dir / "rf_classifier.joblib")    # Note: _classifier suffix
-        joblib.dump(self.lr, output_dir / "lr_classifier.joblib")    # Note: _classifier suffix
-        
-        # Save feature names
-        with open(output_dir / "features.txt", 'w') as f:
-            for feat in feature_names:
-                f.write(f"{feat}\n")
-        
-        # Save pipeline info (matches your node's expected format)
-        pipeline_info = {
-            'architecture': 'Scale → PCA → KNN+RF → Fuse → LR',
-            'n_input_features': len(feature_names),
-            'n_pca_components': self.n_pca_components,
-            'n_fused_features': self.n_pca_components + 4,  # PCA + KNN_proba(2) + RF_proba(2) for binary
-            'pca_explained_variance': float(np.sum(self.pca.explained_variance_ratio_)),
-            'trained_at': datetime.now().isoformat(),
-            'metrics': metrics,
-            # Attack classes for format_prediction_message()
-            'attack_classes': {
-                "0": "Normal",
-                "1": "Attack"
-            }
-        }
-        
-        with open(output_dir / "pipeline_info.json", 'w') as f:
-            json.dump(pipeline_info, f, indent=2)
-        
-        print(f"\n  Saved pipeline to: {output_dir}")
-        print(f"    - scaler.joblib")
-        print(f"    - pca.joblib")
-        print(f"    - knn_classifier.joblib")
-        print(f"    - rf_classifier.joblib")
-        print(f"    - lr_classifier.joblib")
-        print(f"    - features.txt")
-        print(f"    - pipeline_info.json")
-
-
-def evaluate_pipeline(pipeline: MLFusionPipeline, X_test: np.ndarray, 
-                     y_test: np.ndarray) -> dict:
-    """Evaluate the fusion pipeline."""
-    print("\n  Evaluating fusion pipeline...")
-    
-    # Get predictions at each stage
-    intermediate = pipeline.get_intermediate_predictions(X_test)
-    
-    # Evaluate each component
-    print("\n  Component-wise evaluation:")
-    
-    for name, pred in [('KNN', intermediate['knn_pred']), 
-                       ('RF', intermediate['rf_pred']),
-                       ('Fusion (LR)', intermediate['final_pred'])]:
-        acc = accuracy_score(y_test, pred)
-        prec = precision_score(y_test, pred, zero_division=0)
-        rec = recall_score(y_test, pred, zero_division=0)
-        f1 = f1_score(y_test, pred, zero_division=0)
-        print(f"    {name:<15} Acc={acc:.4f}  Prec={prec:.4f}  Rec={rec:.4f}  F1={f1:.4f}")
-    
-    # Final metrics
-    y_pred = intermediate['final_pred']
-    y_proba = intermediate['final_proba']
-    
-    metrics = {
-        'accuracy': accuracy_score(y_test, y_pred),
-        'precision': precision_score(y_test, y_pred, zero_division=0),
-        'recall': recall_score(y_test, y_pred, zero_division=0),
-        'f1': f1_score(y_test, y_pred, zero_division=0),
-    }
-    
-    try:
-        metrics['auc_roc'] = roc_auc_score(y_test, y_proba)
-    except ValueError:
-        metrics['auc_roc'] = 0.0
-    
-    # Confusion matrix
-    cm = confusion_matrix(y_test, y_pred)
-    print(f"\n  Final Confusion Matrix:")
-    print(f"    TN={cm[0,0]:5d}  FP={cm[0,1]:5d}")
-    print(f"    FN={cm[1,0]:5d}  TP={cm[1,1]:5d}")
-    
-    # Component comparison
-    print("\n  Individual component metrics:")
-    for name, proba_key in [('KNN', 'knn_proba'), ('RF', 'rf_proba')]:
-        try:
-            auc = roc_auc_score(y_test, intermediate[proba_key])
-            print(f"    {name} AUC-ROC: {auc:.4f}")
-        except ValueError:
-            pass
-    
-    return metrics
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Train ML Fusion IDS pipeline"
+    # Random Forest
+    print(f"  Training Random Forest (n={RF_ESTIMATORS})...")
+    rf = RandomForestClassifier(
+        n_estimators=RF_ESTIMATORS,
+        max_depth=15,
+        class_weight='balanced',
+        random_state=42,
+        n_jobs=-1
     )
-    parser.add_argument(
-        '--input', '-i',
-        default=DEFAULT_INPUT,
-        help=f"Input labeled CSV file (default: {DEFAULT_INPUT})"
+    rf.fit(X_train_pca, y_train)
+    rf_proba = rf.predict_proba(X_train_pca)
+    rf_proba_test = rf.predict_proba(X_test_pca)
+    
+    # Step 4: Create meta-features
+    print("[Step 4] Creating meta-features...")
+    X_meta_train = np.hstack([knn_proba, rf_proba])
+    X_meta_test = np.hstack([knn_proba_test, rf_proba_test])
+    print(f"  Meta-feature shape: {X_meta_train.shape}")
+    
+    # Step 5: Train meta-classifier (Logistic Regression)
+    print("[Step 5] Training Logistic Regression meta-classifier...")
+    meta_clf = LogisticRegression(
+        class_weight='balanced',
+        max_iter=1000,
+        random_state=42
     )
-    parser.add_argument(
-        '--output', '-o',
-        default=DEFAULT_OUTPUT,
-        help=f"Output directory (default: {DEFAULT_OUTPUT})"
-    )
-    parser.add_argument(
-        '--pca-components', '-p',
-        type=int,
-        default=16,
-        help="Number of PCA components (default: 16)"
-    )
-    parser.add_argument(
-        '--test-size',
-        type=float,
-        default=0.2,
-        help="Test set proportion (default: 0.2)"
-    )
-    
-    args = parser.parse_args()
-    
-    print("="*60)
-    print("ML FUSION PIPELINE TRAINING")
-    print("="*60)
-    print(f"Input:          {args.input}")
-    print(f"Output:         {args.output}")
-    print(f"PCA components: {args.pca_components}")
-    print(f"Test size:      {args.test_size}")
-    
-    # Load data
-    print("\n" + "="*60)
-    print("LOADING DATA")
-    print("="*60)
-    
-    input_path = Path(args.input)
-    if not input_path.exists():
-        print(f"ERROR: Input file not found: {args.input}")
-        return 1
-    
-    df = pd.read_csv(args.input)
-    print(f"Loaded {len(df)} samples")
-    
-    if 'Label' not in df.columns:
-        print("ERROR: 'Label' column not found.")
-        return 1
-    
-    # Find and preprocess features
-    feature_cols = find_feature_columns(df)
-    print(f"Found {len(feature_cols)} feature columns")
-    
-    X, y, feature_names = preprocess_data(df, feature_cols)
-    print(f"Feature matrix shape: {X.shape}")
-    
-    # Adjust PCA components if needed
-    if args.pca_components > X.shape[1]:
-        print(f"Warning: Reducing PCA components from {args.pca_components} to {X.shape[1]}")
-        args.pca_components = X.shape[1]
-    
-    # Class weights
-    class_weights = calculate_class_weights(y)
-    
-    # Train/test split
-    print("\n" + "="*60)
-    print("SPLITTING DATA")
-    print("="*60)
-    
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=args.test_size, random_state=42, stratify=y
-    )
-    print(f"Training: {len(X_train)} samples ({np.sum(y_train)} attacks)")
-    print(f"Test:     {len(X_test)} samples ({np.sum(y_test)} attacks)")
-    
-    # Train pipeline
-    print("\n" + "="*60)
-    print("TRAINING FUSION PIPELINE")
-    print("="*60)
-    print(f"\nPipeline: Scale → PCA({args.pca_components}) → KNN+RF → Fuse → LR")
-    
-    pipeline = MLFusionPipeline(n_pca_components=args.pca_components)
-    pipeline.fit(X_train, y_train, class_weights)
+    meta_clf.fit(X_meta_train, y_train)
     
     # Evaluate
-    print("\n" + "="*60)
-    print("EVALUATION")
-    print("="*60)
+    y_pred = meta_clf.predict(X_meta_test)
+    accuracy = accuracy_score(y_test, y_pred)
     
-    metrics = evaluate_pipeline(pipeline, X_test, y_test)
+    print(f"\n{'=' * 60}")
+    print("FUSION MODEL RESULTS")
+    print("=" * 60)
+    print(f"\nAccuracy: {accuracy:.4f}")
     
-    # Save
-    print("\n" + "="*60)
-    print("SAVING PIPELINE")
-    print("="*60)
+    print("\nConfusion Matrix:")
+    cm = confusion_matrix(y_test, y_pred)
+    print(cm)
     
-    output_dir = Path(args.output)
-    pipeline.save(output_dir, feature_names, metrics)
+    # Calculate metrics
+    tn, fp, fn, tp = cm.ravel()
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    fp_rate = fp / (fp + tn) if (fp + tn) > 0 else 0
     
-    # Summary
-    print("\n" + "="*60)
-    print("TRAINING SUMMARY")
-    print("="*60)
-    print(f"\nFinal Results:")
-    print(f"  Accuracy:  {metrics['accuracy']:.4f}")
-    print(f"  Precision: {metrics['precision']:.4f}")
-    print(f"  Recall:    {metrics['recall']:.4f}")
-    print(f"  F1 Score:  {metrics['f1']:.4f}")
-    print(f"  AUC-ROC:   {metrics.get('auc_roc', 'N/A'):.4f}")
+    print(f"\nAttack Detection:")
+    print(f"  Recall (Detection Rate): {recall:.2%}")
+    print(f"  Precision: {precision:.2%}")
+    print(f"  False Positive Rate: {fp_rate:.2%}")
     
-    print("\n✓ ML Fusion training complete!")
+    print("\nClassification Report:")
+    print(classification_report(y_test, y_pred, target_names=['Benign', 'Attack']))
     
-    return 0
+    # Return all components
+    return {
+        'scaler': scaler,
+        'pca': pca,
+        'knn': knn,
+        'rf': rf,
+        'meta_clf': meta_clf,
+        'accuracy': accuracy,
+        'recall': recall,
+        'precision': precision,
+        'fp_rate': fp_rate
+    }
 
+def main():
+    # Create model directory
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    
+    # Load data
+    X, y, feature_names = load_data()
+    
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    print(f"\nTrain set: {len(X_train)} samples")
+    print(f"Test set: {len(X_test)} samples")
+    
+    # Train fusion model
+    components = train_fusion_model(X_train, X_test, y_train, y_test)
+    
+    # Save all components
+    print(f"\n{'=' * 60}")
+    print("SAVING MODEL COMPONENTS")
+    print("=" * 60)
+    
+    # Save as a single pipeline object
+    fusion_pipeline = {
+        'scaler': components['scaler'],
+        'pca': components['pca'],
+        'knn': components['knn'],
+        'rf': components['rf'],
+        'meta_clf': components['meta_clf']
+    }
+    
+    pipeline_path = os.path.join(MODEL_DIR, "ml_fusion_navbot.joblib")
+    joblib.dump(fusion_pipeline, pipeline_path)
+    print(f"Fusion pipeline saved to: {pipeline_path}")
+    
+    # Save config
+    config = {
+        'pca_components': PCA_COMPONENTS,
+        'knn_neighbors': KNN_NEIGHBORS,
+        'rf_estimators': RF_ESTIMATORS,
+        'n_features': len(feature_names),
+        'accuracy': components['accuracy'],
+        'recall': components['recall'],
+        'precision': components['precision'],
+        'fp_rate': components['fp_rate']
+    }
+    config_path = os.path.join(MODEL_DIR, "ml_fusion_navbot_config.json")
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=2)
+    print(f"Config saved to: {config_path}")
+    
+    print(f"\nFusion model accuracy: {components['accuracy']:.4f}")
+    print(f"Fusion model recall: {components['recall']:.2%}")
 
 if __name__ == "__main__":
-    exit(main())
+    main()

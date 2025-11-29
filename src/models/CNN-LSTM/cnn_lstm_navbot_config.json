@@ -1,0 +1,15 @@
+{
+  "input_shape": [
+    76,
+    1
+  ],
+  "n_features": 76,
+  "optimal_threshold": 0.5,
+  "accuracy": 0.9882616895363204,
+  "best_metrics": {
+    "recall": 0.9844226210633255,
+    "precision": 0.9980871100647439,
+    "fp_rate": 0.003867896459387087,
+    "f1": 0.9912077741786209
+  }
+}

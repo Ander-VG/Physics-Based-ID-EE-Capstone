@@ -1,0 +1,10 @@
+{
+  "pca_components": 20,
+  "knn_neighbors": 5,
+  "rf_estimators": 50,
+  "n_features": 76,
+  "accuracy": 0.9951225856799115,
+  "recall": 0.994436650379759,
+  "precision": 0.9983002282550629,
+  "fp_rate": 0.003471189130219181
+}
