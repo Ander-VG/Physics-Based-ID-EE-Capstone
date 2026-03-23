@@ -16,6 +16,8 @@
 
 using std::placeholders::_1;
 using std::vector;
+using std::cout;
+using std::endl;
 
 enum State { NORMAL, ALERT };
 
@@ -33,7 +35,9 @@ public:
     : Node("detector_node"),
       curr_state_(NORMAL),
       good_samps_(0),
-      clk_(250)
+      clk_(25),
+      t_(0.0),
+      dt_(1.0 / 200.0)
     {
         auto cb_group = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
         auto sub_opts = rclcpp::SubscriptionOptions();
@@ -75,6 +79,11 @@ private:
     int good_samps_;
     const int clk_;
 
+    // ── Elapsed time counter ─────────────────────────────────────────────────
+
+    double t_;
+    const double dt_;
+
     // ── Callbacks ────────────────────────────────────────────────────────────
 
     void odometry_callback(const nav_msgs::msg::Odometry & msg) {
@@ -110,16 +119,27 @@ private:
             welford_calibration(sample);
         }
 
-        if (!result.calibrated) return;
+        if (!result.calibrated) {
+            t_ += dt_;
+            return;
+        }
+
+        if (result.anomaly) {
+            cout << "ATTACK | ts = " << t_ << "  T2 = " << result.t2_score
+                 << "  (thr = " << result.threshold << ")" << endl;
+        } else {
+            cout << "ts = " << t_ << "  T2 = " << result.t2_score << endl;
+        }
 
         switch (curr_state_) {
             case NORMAL:
                 if (result.anomaly) {
                     RCLCPP_WARN(this->get_logger(),
-                        "ALERT  - Sensor spoofing detected  | T2 = %.2f  (thr = %.2f)",
-                        result.t2_score, result.threshold);
+                        "ALERT  - Sensor spoofing detected  | ts = %.2f  T2 = %.2f  (thr = %.2f)",
+                        t_, result.t2_score, result.threshold);
                     curr_state_ = ALERT;
                     good_samps_ = 0;
+                    cout << "ALERT  - Sensor spoofing detected  | T2 = " << result.t2_score << "  (thr = " << result.threshold << ")" << endl;
                 }
                 break;
 
@@ -130,14 +150,17 @@ private:
                     good_samps_++;
                     if (good_samps_ >= clk_) {
                         RCLCPP_INFO(this->get_logger(),
-                            "NORMAL - System returned to normal | T2 = %.2f  (thr = %.2f)",
-                            result.t2_score, result.threshold);
+                            "NORMAL - System returned to normal | ts = %.2f  T2 = %.2f  (thr = %.2f)",
+                            t_, result.t2_score, result.threshold);
                         curr_state_ = NORMAL;
                         good_samps_ = 0;
+                        cout << "NORMAL - System returned to normal | T2 = " << result.t2_score << "  (thr = " << result.threshold << ")" << endl;
                     }
                 }
                 break;
         }
+
+        t_ += dt_;
     }
 
     void imu_callback(const sensor_msgs::msg::Imu & msg) {
