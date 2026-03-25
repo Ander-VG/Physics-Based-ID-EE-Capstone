@@ -3,6 +3,7 @@
 #include <mutex>
 #include <cmath>
 #include <memory>
+#include <string>
 
 // ROS2
 #include "rclcpp/rclcpp.hpp"
@@ -13,13 +14,14 @@
 #include "std_msgs/msg/float32_multi_array.hpp"
 
 #include "sensor_det.h"
+#include "alert.h"
 
 using std::placeholders::_1;
 using std::vector;
 using std::cout;
 using std::endl;
 
-enum State { NORMAL, ALERT };
+enum State { NORMAL, WARNING, ALERT };
 
 double yaw_transform(double x, double y, double z, double w)
 {
@@ -36,6 +38,7 @@ public:
       curr_state_(NORMAL),
       good_samps_(0),
       clk_(25),
+      alert_threshold_(5000.0f),
       t_(0.0),
       dt_(1.0 / 200.0)
     {
@@ -78,6 +81,7 @@ private:
     State curr_state_;
     int good_samps_;
     const int clk_;
+    const float alert_threshold_;
 
     // ── Elapsed time counter ─────────────────────────────────────────────────
 
@@ -113,9 +117,16 @@ private:
             };
         }
 
+        // Convert absolute odom to deltas; skip the very first sample
+        if (!preprocess_sample(sample)) {
+            t_ += dt_;
+            return;
+        }
+
         welford_results result = detector(sample);
 
-        if (!result.calibrated || !result.anomaly) {
+        // Only update baseline while in NORMAL
+        if (curr_state_ == NORMAL && (!result.calibrated || !result.anomaly)) {
             welford_calibration(sample);
         }
 
@@ -124,22 +135,80 @@ private:
             return;
         }
 
-        if (result.anomaly) {
-            cout << "ATTACK | ts = " << t_ << "  T2 = " << result.t2_score
-                 << "  (thr = " << result.threshold << ")" << endl;
-        } else {
-            cout << "ts = " << t_ << "  T2 = " << result.t2_score << endl;
-        }
+        // ── 3-state FSM with API alerts on transitions ──────────────────
 
         switch (curr_state_) {
             case NORMAL:
-                if (result.anomaly) {
-                    RCLCPP_WARN(this->get_logger(),
-                        "ALERT  - Sensor spoofing detected  | ts = %.2f  T2 = %.2f  (thr = %.2f)",
+                if (result.anomaly && result.t2_score > alert_threshold_) {
+                    RCLCPP_ERROR(this->get_logger(),
+                        "ALERT   - High-confidence attack   | ts = %.2f  T2 = %.2f  (thr = %.2f)",
                         t_, result.t2_score, result.threshold);
+                    send_alert(
+                        "High-confidence sensor spoofing attack detected",
+                        "high",
+                        "physics-ids",
+                        "sensor_spoofing",
+                        .99,
+                        "{\"t2_score\":" + std::to_string(result.t2_score) +
+                        ",\"threshold\":" + std::to_string(result.threshold) +
+                        ",\"alert_threshold\":" + std::to_string(alert_threshold_) +
+                        ",\"timestamp\":" + std::to_string(t_) + "}");
                     curr_state_ = ALERT;
                     good_samps_ = 0;
-                    cout << "ALERT  - Sensor spoofing detected  | T2 = " << result.t2_score << "  (thr = " << result.threshold << ")" << endl;
+                } else if (result.anomaly) {
+                    RCLCPP_WARN(this->get_logger(),
+                        "WARNING - Anomaly detected         | ts = %.2f  T2 = %.2f  (thr = %.2f)",
+                        t_, result.t2_score, result.threshold);
+                    send_alert(
+                        "Anomaly detected on TurtleBot3 sensor stream",
+                        "medium",
+                        "physics-ids",
+                        "sensor_anomaly",
+                        .60,
+                        "{\"t2_score\":" + std::to_string(result.t2_score) +
+                        ",\"threshold\":" + std::to_string(result.threshold) +
+                        ",\"timestamp\":" + std::to_string(t_) + "}");
+                    curr_state_ = WARNING;
+                    good_samps_ = 0;
+                }
+                break;
+
+            case WARNING:
+                if (result.t2_score > alert_threshold_) {
+                    RCLCPP_ERROR(this->get_logger(),
+                        "ALERT   - Escalated from WARNING   | ts = %.2f  T2 = %.2f  (thr = %.2f)",
+                        t_, result.t2_score, result.threshold);
+                    send_alert(
+                        "Escalated to critical - sensor spoofing confirmed",
+                        "high",
+                        "physics-ids",
+                        "sensor_spoofing",
+                        .99,
+                        "{\"t2_score\":" + std::to_string(result.t2_score) +
+                        ",\"threshold\":" + std::to_string(result.threshold) +
+                        ",\"alert_threshold\":" + std::to_string(alert_threshold_) +
+                        ",\"timestamp\":" + std::to_string(t_) + "}");
+                    curr_state_ = ALERT;
+                    good_samps_ = 0;
+                } else if (result.anomaly) {
+                    good_samps_ = 0;
+                } else {
+                    good_samps_++;
+                    if (good_samps_ >= clk_) {
+                        RCLCPP_INFO(this->get_logger(),
+                            "NORMAL  - Cleared from WARNING    | ts = %.2f  T2 = %.2f  (thr = %.2f)",
+                            t_, result.t2_score, result.threshold);
+                        send_alert(
+                            "System returned to normal operation",
+                            "low",
+                            "physics-ids",
+                            "status_update",
+                            .99,
+                            "{\"t2_score\":" + std::to_string(result.t2_score) +
+                            ",\"timestamp\":" + std::to_string(t_) + "}");
+                        curr_state_ = NORMAL;
+                        good_samps_ = 0;
+                    }
                 }
                 break;
 
@@ -149,12 +218,19 @@ private:
                 } else {
                     good_samps_++;
                     if (good_samps_ >= clk_) {
-                        RCLCPP_INFO(this->get_logger(),
-                            "NORMAL - System returned to normal | ts = %.2f  T2 = %.2f  (thr = %.2f)",
+                        RCLCPP_WARN(this->get_logger(),
+                            "WARNING - De-escalated from ALERT | ts = %.2f  T2 = %.2f  (thr = %.2f)",
                             t_, result.t2_score, result.threshold);
-                        curr_state_ = NORMAL;
+                        send_alert(
+                            "Attack severity reduced - de-escalated to warning",
+                            "medium",
+                            "physics-ids",
+                            "sensor_anomaly",
+                            .40,
+                            "{\"t2_score\":" + std::to_string(result.t2_score) +
+                            ",\"timestamp\":" + std::to_string(t_) + "}");
+                        curr_state_ = WARNING;
                         good_samps_ = 0;
-                        cout << "NORMAL - System returned to normal | T2 = " << result.t2_score << "  (thr = " << result.threshold << ")" << endl;
                     }
                 }
                 break;

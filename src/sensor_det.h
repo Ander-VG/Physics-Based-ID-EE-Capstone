@@ -15,7 +15,7 @@ struct welford_results {
 };
  
 // ── Function Prototypes ──────────────────────────────────────────────────────
- 
+bool           preprocess_sample(vector<float>& samples);
 void            invert_matrix(float S[15][15], float S_inv[15][15]);
 void            welford_calibration(vector<float> samples);
 welford_results detector(vector<float> samples);

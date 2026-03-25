@@ -12,9 +12,10 @@ find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(CURL REQUIRED)
 
 # build executable
-add_executable(sensor_det src/main.cpp src/sensor_det.cpp)
+add_executable(sensor_det src/main.cpp src/sensor_det.cpp src/alert.cpp)
 ament_target_dependencies(sensor_det
   rclcpp
   std_msgs
@@ -23,7 +24,12 @@ ament_target_dependencies(sensor_det
   sensor_msgs
 )
 
-target_include_directories(sensor_det PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(sensor_det PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CURL_INCLUDE_DIRS}
+)
+
+target_link_libraries(sensor_det ${CURL_LIBRARIES})
 
 install(TARGETS sensor_det
   DESTINATION lib/${PROJECT_NAME}
