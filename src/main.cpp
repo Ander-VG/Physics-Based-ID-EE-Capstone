@@ -4,6 +4,7 @@
 #include <cmath>
 #include <memory>
 #include <string>
+#include <chrono>
 
 // ROS2
 #include "rclcpp/rclcpp.hpp"
@@ -102,6 +103,7 @@ private:
     }
 
     void velocity_callback(const geometry_msgs::msg::Twist & msg) {
+        auto t_recv = std::chrono::steady_clock::now();
         float lin_x = msg.linear.x;
         float ang_z = msg.angular.z;
 
@@ -153,6 +155,12 @@ private:
                         ",\"threshold\":" + std::to_string(result.threshold) +
                         ",\"alert_threshold\":" + std::to_string(alert_threshold_) +
                         ",\"timestamp\":" + std::to_string(t_) + "}");
+                    {
+                        auto t_now = std::chrono::steady_clock::now();
+                        RCLCPP_INFO(this->get_logger(),
+                            "Processing + Alert: %ld us",
+                            std::chrono::duration_cast<std::chrono::microseconds>(t_now - t_recv).count());
+                    }
                     curr_state_ = ALERT;
                     good_samps_ = 0;
                 } else if (result.anomaly) {
@@ -168,6 +176,12 @@ private:
                         "{\"t2_score\":" + std::to_string(result.t2_score) +
                         ",\"threshold\":" + std::to_string(result.threshold) +
                         ",\"timestamp\":" + std::to_string(t_) + "}");
+                    {
+                        auto t_now = std::chrono::steady_clock::now();
+                        RCLCPP_INFO(this->get_logger(),
+                            "Processing + Alert: %ld us",
+                            std::chrono::duration_cast<std::chrono::microseconds>(t_now - t_recv).count());
+                    }
                     curr_state_ = WARNING;
                     good_samps_ = 0;
                 }
@@ -188,6 +202,12 @@ private:
                         ",\"threshold\":" + std::to_string(result.threshold) +
                         ",\"alert_threshold\":" + std::to_string(alert_threshold_) +
                         ",\"timestamp\":" + std::to_string(t_) + "}");
+                    {
+                        auto t_now = std::chrono::steady_clock::now();
+                        RCLCPP_INFO(this->get_logger(),
+                            "Processing + Alert: %ld us",
+                            std::chrono::duration_cast<std::chrono::microseconds>(t_now - t_recv).count());
+                    }
                     curr_state_ = ALERT;
                     good_samps_ = 0;
                 } else if (result.anomaly) {
@@ -206,6 +226,12 @@ private:
                             .99,
                             "{\"t2_score\":" + std::to_string(result.t2_score) +
                             ",\"timestamp\":" + std::to_string(t_) + "}");
+                        {
+                            auto t_now = std::chrono::steady_clock::now();
+                            RCLCPP_INFO(this->get_logger(),
+                                "Processing + Alert: %ld us",
+                                std::chrono::duration_cast<std::chrono::microseconds>(t_now - t_recv).count());
+                        }
                         curr_state_ = NORMAL;
                         good_samps_ = 0;
                     }
@@ -229,6 +255,12 @@ private:
                             .40,
                             "{\"t2_score\":" + std::to_string(result.t2_score) +
                             ",\"timestamp\":" + std::to_string(t_) + "}");
+                        {
+                            auto t_now = std::chrono::steady_clock::now();
+                            RCLCPP_INFO(this->get_logger(),
+                                "Processing + Alert: %ld us",
+                                std::chrono::duration_cast<std::chrono::microseconds>(t_now - t_recv).count());
+                        }
                         curr_state_ = WARNING;
                         good_samps_ = 0;
                     }
