@@ -67,7 +67,7 @@ public:
 
 private:
 
-    // ── Cached sensor values (fill-forward) ──────────────────────────────────
+    // Cached sensor values (fill-forward)
 
     std::mutex data_mutex_;
 
@@ -77,19 +77,19 @@ private:
     float v_R_ = 0, v_L_ = 0;
     float error_x_ = 0, error_y_ = 0;
 
-    // ── FSM state ────────────────────────────────────────────────────────────
+    // FSM state 
 
     State curr_state_;
     int good_samps_;
     const int clk_;
     const float alert_threshold_;
 
-    // ── Elapsed time counter ─────────────────────────────────────────────────
+    // Elapsed time counter 
 
     double t_;
     const double dt_;
 
-    // ── Callbacks ────────────────────────────────────────────────────────────
+    // Callbacks 
 
     void odometry_callback(const nav_msgs::msg::Odometry & msg) {
         std::lock_guard<std::mutex> lock(data_mutex_);
@@ -137,7 +137,7 @@ private:
             return;
         }
 
-        // ── 3-state FSM with API alerts on transitions ──────────────────
+        // 3-state FSM with API alerts on transitions 
 
         switch (curr_state_) {
             case NORMAL:
@@ -295,7 +295,7 @@ private:
         }
     }
 
-    // ── Subscription handles ─────────────────────────────────────────────────
+    // Subscription handles
 
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_sub_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr velocity_sub_;

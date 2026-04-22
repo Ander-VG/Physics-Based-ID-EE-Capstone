@@ -13,8 +13,7 @@ static const int N_cap = 1000;
 static const int P = 15;
 static const float F_crit = 24.5f;
 
-// ── Delta odom state ─────────────────────────────────────────────────────────
-
+// Delta odom state
 static bool has_prev = false;
 static float prev_odom_x = 0, prev_odom_y = 0, prev_odom_theta = 0;
 
@@ -50,7 +49,7 @@ bool preprocess_sample(vector<float>& samples) {
     return true;
 }
 
-// ── Matrix inversion (Gauss-Jordan with partial pivoting) ────────────────────
+//  Matrix inversion (Gauss-Jordan with partial pivoting) 
 
 void invert_matrix(float S[15][15], float S_inv[15][15]) {
     float aug[15][30];
@@ -95,7 +94,7 @@ void invert_matrix(float S[15][15], float S_inv[15][15]) {
     }
 }
 
-// ── Welford calibration ──────────────────────────────────────────────────────
+// Welford calibration 
 
 void welford_calibration(vector<float> samples) {
     if (n < N_cap) {
@@ -125,7 +124,7 @@ void welford_calibration(vector<float> samples) {
     }
 }
 
-// ── Hotelling T² detector ────────────────────────────────────────────────────
+// Hotelling T^2 detector 
 
 welford_results detector(vector<float> samples) {
     welford_results result;

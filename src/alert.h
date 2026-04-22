@@ -7,7 +7,7 @@ bool send_alert(const std::string& message,
                 const std::string& severity,
                 const std::string& source,
                 const std::string& type,
-                int confidence,
+                double confidence,
                 const std::string& data_json = "{}");
  
 #endif
